@@ -1,6 +1,7 @@
 import express from 'express'
 import swaggerUi from 'swagger-ui-express'
 import authRouter from '../src/routes/authRoute.js'
+import productRouter from './routes/productRoute.js'
 import errorHandler from './middleware/errorHandler.js'
 import swaggerSpec from './configs/swagger.js'
 const app = express()
@@ -12,6 +13,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 app.get('/api-docs.json', (req, res) => res.json(swaggerSpec))
 
 app.use('/api', authRouter)
+app.use('/api', productRouter)
 
 // Error handler must be registered after all routes
 app.use(errorHandler)
