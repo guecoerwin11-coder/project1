@@ -6,3 +6,5 @@ node_modules
 .windsurf
 .claude
 .agents
+
+logs/
