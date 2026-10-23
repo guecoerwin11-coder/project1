@@ -21,12 +21,17 @@ process.env.JWT_PASS = 'test-access-secret'
 const { default: request } = await import('supertest')
 const { default: app } = await import('../src/app.js')
 
-// A real signed token, like the one login would return
-const token = jwt.sign(
-    { id: 'user-1', userName: 'johndoe', email: 'john@example.com' },
-    process.env.JWT_PASS
-)
-const auth = { Authorization: `Bearer ${token}` }
+// Real signed tokens, like the ones login would return, one per role
+const makeAuth = (roles) => {
+    const token = jwt.sign(
+        { id: `user-${roles}`, userName: 'johndoe', email: 'john@example.com', roles },
+        process.env.JWT_PASS
+    )
+    return { Authorization: `Bearer ${token}` }
+}
+const auth = makeAuth('ADMIN')
+const sellerAuth = makeAuth('SELLER')
+const customerAuth = makeAuth('CUSTOMER')
 
 const sampleProduct = {
     id: 'prod-1',
@@ -115,6 +120,39 @@ describe('POST /api/products', () => {
         expect(res.body.error.message).toBe('Invalid Token or Expired Token')
     })
 
+    it('lets a SELLER create a product', async () => {
+        prismaMock.product.create.mockImplementation(async ({ data }) => ({ id: 'prod-3', ...data }))
+
+        const res = await request(app)
+            .post('/api/products')
+            .set(sellerAuth)
+            .send({ name: 'Headset', price: 30 })
+
+        expect(res.status).toBe(201)
+    })
+
+    it('returns 403 for a CUSTOMER', async () => {
+        const res = await request(app)
+            .post('/api/products')
+            .set(customerAuth)
+            .send({ name: 'Keyboard', price: 49.5 })
+
+        expect(res.status).toBe(403)
+        expect(res.body.error.message).toBe('You do not have permission to do this')
+        expect(prismaMock.product.create).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 for an old token that has no role', async () => {
+        const oldToken = jwt.sign({ id: 'user-1' }, process.env.JWT_PASS)
+
+        const res = await request(app)
+            .post('/api/products')
+            .set({ Authorization: `Bearer ${oldToken}` })
+            .send({ name: 'Keyboard', price: 49.5 })
+
+        expect(res.status).toBe(403)
+    })
+
     it('returns 400 when name is missing', async () => {
         const res = await request(app)
             .post('/api/products')
@@ -165,6 +203,16 @@ describe('PUT /api/products/:id', () => {
         })
     })
 
+    it('returns 403 for a CUSTOMER', async () => {
+        const res = await request(app)
+            .put('/api/products/prod-1')
+            .set(customerAuth)
+            .send({ stock: 5 })
+
+        expect(res.status).toBe(403)
+        expect(prismaMock.product.update).not.toHaveBeenCalled()
+    })
+
     it('returns 400 when the body is empty', async () => {
         const res = await request(app)
             .put('/api/products/prod-1')
@@ -198,6 +246,15 @@ describe('DELETE /api/products/:id', () => {
 
         expect(res.status).toBe(200)
         expect(res.body.message).toBe('product deleted')
+    })
+
+    it('returns 403 for a CUSTOMER', async () => {
+        const res = await request(app)
+            .delete('/api/products/prod-1')
+            .set(customerAuth)
+
+        expect(res.status).toBe(403)
+        expect(prismaMock.product.delete).not.toHaveBeenCalled()
     })
 
     it('returns 401 without a token', async () => {
