@@ -57,6 +57,22 @@ describe('POST /api/register', () => {
         expect(await bcrypt.compare('secret123', saved)).toBe(true)
     })
 
+    it('ignores a role sent in the body, so users cannot make themselves admin', async () => {
+        prismaMock.user.findUnique.mockResolvedValue(null)
+        // The database default gives every new user the CUSTOMER role
+        prismaMock.user.create.mockImplementation(async ({ data }) => ({ id: 'new-id', roles: 'CUSTOMER', ...data }))
+
+        const res = await request(app)
+            .post('/api/register')
+            .send({ userName: 'sneaky', email: 'sneaky@example.com', password: 'secret123', roles: 'ADMIN' })
+
+        expect(res.status).toBe(201)
+        expect(prismaMock.user.create.mock.calls[0][0].data).not.toHaveProperty('roles')
+
+        const decoded = jwt.verify(res.body.accessToken, process.env.JWT_PASS)
+        expect(decoded.roles).toBe('CUSTOMER')
+    })
+
     it('returns 400 when a field is missing', async () => {
         const res = await request(app)
             .post('/api/register')
