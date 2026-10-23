@@ -26,6 +26,8 @@ model User {
   roles ROLES @default(CUSTOMER)
   createdAt DateTime @default(now())
 }
+
+
 model Product {
   id          String   @id @default(uuid())
   name        String
@@ -34,4 +36,41 @@ model Product {
   stock       Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+ 
+  cart Cart[]
+  orders Order[]
+
+
+  @@index([name, description])
+}
+
+enum STATUS{
+  PENDING
+  SHIPPED
+  RECEIVE
+  CANCEL
+}
+
+model Order{
+  id String @id @default(uuid())
+  userId String @map("user_id")
+  productId String @map("product_id")
+  status STATUS @default(PENDING)
+  createdAt DateTime @default(now())
+
+  products Product @relation(references: [id], fields: [productId], onDelete: Cascade)
+
+  carts Cart[]
+}
+
+model Cart{
+  id String @id @default(uuid())
+  quantity Int
+  productId String
+  orderId String
+  createdAt DateTime @default(now())
+
+ products Product @relation(references: [id], fields: [productId], onDelete: Cascade)
+
+ orders Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
