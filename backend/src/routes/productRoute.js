@@ -1,10 +1,14 @@
 import express from 'express'
 import validation from '../middleware/validation.js'
+import isAuthorize from '../middleware/isAuthorize.js'
 import {
     getProducts, getProductById, createProduct, updateProduct, deleteProduct
 } from '../controllers/productController.js'
 
 const productRouter = express.Router()
+
+// Only admins and sellers can create, update or delete products
+const canManageProducts = isAuthorize('ADMIN', 'SELLER')
 
 /**
  * @openapi
@@ -34,6 +38,7 @@ const productRouter = express.Router()
  *   post:
  *     summary: Create a product
  *     tags: [Products]
+ *     description: Requires the ADMIN or SELLER role.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -67,9 +72,15 @@ const productRouter = express.Router()
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged in, but role is not ADMIN or SELLER
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 productRouter.get('/products', getProducts)
-productRouter.post('/products', validation, createProduct)
+productRouter.post('/products', validation, canManageProducts, createProduct)
 
 /**
  * @openapi
@@ -102,7 +113,7 @@ productRouter.post('/products', validation, createProduct)
  *               $ref: '#/components/schemas/ErrorResponse'
  *   put:
  *     summary: Update a product
- *     description: Send only the fields you want to change.
+ *     description: Requires the ADMIN or SELLER role. Send only the fields you want to change.
  *     tags: [Products]
  *     security:
  *       - bearerAuth: []
@@ -137,6 +148,12 @@ productRouter.post('/products', validation, createProduct)
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged in, but role is not ADMIN or SELLER
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
  *         description: Product not found
  *         content:
@@ -146,6 +163,7 @@ productRouter.post('/products', validation, createProduct)
  *   delete:
  *     summary: Delete a product
  *     tags: [Products]
+ *     description: Requires the ADMIN or SELLER role.
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -161,6 +179,12 @@ productRouter.post('/products', validation, createProduct)
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged in, but role is not ADMIN or SELLER
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
  *         description: Product not found
  *         content:
@@ -169,7 +193,7 @@ productRouter.post('/products', validation, createProduct)
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 productRouter.get('/products/:id', getProductById)
-productRouter.put('/products/:id', validation, updateProduct)
-productRouter.delete('/products/:id', validation, deleteProduct)
+productRouter.put('/products/:id', validation, canManageProducts, updateProduct)
+productRouter.delete('/products/:id', validation, canManageProducts, deleteProduct)
 
 export default productRouter
