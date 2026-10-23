@@ -83,6 +83,66 @@ const options = {
                         stock: { type: 'integer', minimum: 0, example: 30 }
                     }
                 },
+                OrderItem: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        quantity: { type: 'integer', example: 2 },
+                        productId: { type: 'string', format: 'uuid' },
+                        orderId: { type: 'string', format: 'uuid' },
+                        createdAt: { type: 'string', format: 'date-time' },
+                        products: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string', format: 'uuid' },
+                                name: { type: 'string', example: 'Wireless Mouse' },
+                                price: { type: 'string', example: '19.99' }
+                            }
+                        }
+                    }
+                },
+                Order: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        userId: { type: 'string', format: 'uuid' },
+                        productId: { type: 'string', format: 'uuid', description: 'First product in the order. See carts for the full list.' },
+                        status: { type: 'string', enum: ['PENDING', 'SHIPPED', 'RECEIVE', 'CANCEL'], example: 'PENDING' },
+                        createdAt: { type: 'string', format: 'date-time' },
+                        carts: {
+                            type: 'array',
+                            description: 'The items in the order',
+                            items: { $ref: '#/components/schemas/OrderItem' }
+                        },
+                        total: { type: 'string', description: 'Sum of price times quantity, using current product prices', example: '39.98' }
+                    }
+                },
+                CreateOrderRequest: {
+                    type: 'object',
+                    required: ['items'],
+                    properties: {
+                        items: {
+                            type: 'array',
+                            minItems: 1,
+                            maxItems: 50,
+                            items: {
+                                type: 'object',
+                                required: ['productId', 'quantity'],
+                                properties: {
+                                    productId: { type: 'string', format: 'uuid' },
+                                    quantity: { type: 'integer', minimum: 1, maximum: 100, example: 2 }
+                                }
+                            }
+                        }
+                    }
+                },
+                UpdateOrderStatusRequest: {
+                    type: 'object',
+                    required: ['status'],
+                    properties: {
+                        status: { type: 'string', enum: ['PENDING', 'SHIPPED', 'RECEIVE', 'CANCEL'], example: 'SHIPPED' }
+                    }
+                },
                 ErrorResponse: {
                     type: 'object',
                     properties: {
@@ -95,6 +155,33 @@ const options = {
                             }
                         }
                     }
+                }
+            },
+            // Reusable responses, referenced from route docs with $ref
+            responses: {
+                Unauthorized: {
+                    description: 'Missing, invalid or expired token',
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorResponse' }
+                        }
+                    }
+                },
+                OrderNotFound: {
+                    description: 'Order does not exist, or belongs to someone else',
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorResponse' }
+                        }
+                    }
+                }
+            },
+            parameters: {
+                OrderId: {
+                    in: 'path',
+                    name: 'id',
+                    required: true,
+                    schema: { type: 'string', format: 'uuid' }
                 }
             }
         }
