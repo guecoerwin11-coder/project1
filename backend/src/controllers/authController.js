@@ -6,7 +6,7 @@ import logger from '../logger/logger.js'
 
 const accessToken = (user) => {
     return jwt.sign(
-        {id: user.id, userName: user.userName, email: user.email},
+        {id: user.id, userName: user.userName, email: user.email, roles: user.roles},
         process.env.JWT_PASS,
         {
             expiresIn: '2d'
@@ -15,7 +15,7 @@ const accessToken = (user) => {
 }
 const refreshToken = (user) => {
     return jwt.sign(
-        {id: user.id, userName: user.userName, email: user.email},
+        {id: user.id, userName: user.userName, email: user.email, roles: user.roles},
         process.env.JWT_FRESH,
         {
             expiresIn: '7d'
