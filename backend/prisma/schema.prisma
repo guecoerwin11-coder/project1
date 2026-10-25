@@ -27,6 +27,7 @@ model User {
   createdAt DateTime @default(now())
 
   cartItems CartItem[]
+  orders    Order[]
 }
 
 model Product {
@@ -38,8 +39,11 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Set when a product that appears in orders is deleted. The row is kept so
+  // order history still works, but the product is hidden and cannot be bought.
+  archivedAt DateTime?
+
   cart      Cart[]
-  orders    Order[]
   cartItems CartItem[]
 
   @@index([name, description])
@@ -55,23 +59,29 @@ enum STATUS {
 model Order {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
-  productId String   @map("product_id")
   status    STATUS   @default(PENDING)
   createdAt DateTime @default(now())
 
-  products Product @relation(references: [id], fields: [productId], onDelete: Cascade)
+  // Restrict: a user who has orders cannot be deleted, so order history stays complete
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   carts Cart[]
+
+  @@index([userId])
 }
 
+// The items inside a placed order
 model Cart {
   id        String   @id @default(uuid())
   quantity  Int
+  // The price at the moment of purchase. Later price changes do not touch old orders.
+  price     Decimal  @db.Decimal(10, 2)
   productId String
   orderId   String
   createdAt DateTime @default(now())
 
-  products Product @relation(references: [id], fields: [productId], onDelete: Cascade)
+  // Restrict: a product that appears in an order cannot be deleted. It is archived instead.
+  products Product @relation(references: [id], fields: [productId], onDelete: Restrict)
 
   orders Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }

@@ -172,6 +172,18 @@ describe('POST /api/cart/items', () => {
         expect(res.status).toBe(404)
     })
 
+    it('returns 404 when the product is archived', async () => {
+        prismaMock.product.findUnique.mockResolvedValue({ ...mouse, archivedAt: '2026-10-25T00:00:00.000Z' })
+
+        const res = await request(app)
+            .post('/api/cart/items')
+            .set(auth)
+            .send({ productId: 'prod-1' })
+
+        expect(res.status).toBe(404)
+        expect(prismaMock.cartItem.upsert).not.toHaveBeenCalled()
+    })
+
     it('returns 400 when productId is missing', async () => {
         const res = await request(app).post('/api/cart/items').set(auth).send({ quantity: 1 })
 

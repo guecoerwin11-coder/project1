@@ -48,7 +48,7 @@ const validateQuantity = (quantity) => {
 
 const findProductOrFail = async (productId) => {
     const product = await prisma.product.findUnique({ where: { id: productId } })
-    if(!product){
+    if(!product || product.archivedAt){
         throw new NotFound("product not found")
     }
     return product

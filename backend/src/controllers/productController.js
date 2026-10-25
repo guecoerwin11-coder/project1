@@ -46,7 +46,8 @@ const validateProduct = (body, partial = false) => {
 
 const findProductOrFail = async (id) => {
     const product = await prisma.product.findUnique({ where: { id } })
-    if(!product){
+    // Archived products are kept for order history, but act as deleted everywhere else
+    if(!product || product.archivedAt){
         throw new NotFound("product not found")
     }
     return product
@@ -55,6 +56,7 @@ const findProductOrFail = async (id) => {
 const getProducts = async (req, res, next) => {
     try{
         const products = await prisma.product.findMany({
+            where: { archivedAt: null },
             orderBy: { createdAt: 'desc' }
         })
         res.status(200).json({ products })
@@ -111,18 +113,32 @@ const updateProduct = async (req, res, next) => {
     }
 }
 
+// A product that was never ordered is deleted for real.
+// A product that appears in orders is archived instead, so order history keeps
+// working: it disappears from the shop, from carts, and cannot be bought again.
 const deleteProduct = async (req, res, next) => {
     try{
-        await findProductOrFail(req.params.id)
-        await prisma.product.delete({ where: { id: req.params.id } })
+        const id = req.params.id
+        await findProductOrFail(id)
 
-        logger.info({
-            message: "Product deleted",
-            productId: req.params.id,
-            userId: req.user.id
-        })
+        const timesOrdered = await prisma.cart.count({ where: { productId: id } })
 
-        res.status(200).json({ message: "product deleted" })
+        if(timesOrdered === 0){
+            await prisma.product.delete({ where: { id } })
+            logger.info({ message: "Product deleted", productId: id, userId: req.user.id })
+            return res.status(200).json({ message: "product deleted", archived: false })
+        }
+
+        await prisma.$transaction([
+            prisma.product.update({
+                where: { id },
+                data: { archivedAt: new Date(), stock: 0 }
+            }),
+            prisma.cartItem.deleteMany({ where: { productId: id } })
+        ])
+
+        logger.info({ message: "Product archived", productId: id, userId: req.user.id, timesOrdered })
+        res.status(200).json({ message: "product archived, it is kept for order history", archived: true })
     }catch(err){
         next(err)
     }

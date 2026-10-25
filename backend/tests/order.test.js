@@ -46,16 +46,16 @@ const otherCustomer = makeAuth('customer-2', 'CUSTOMER')
 const seller = makeAuth('seller-1', 'SELLER')
 const admin = makeAuth('admin-1', 'ADMIN')
 
-// An order owned by customer-1 with 2 x 19.99 and 1 x 5.50
+// An order owned by customer-1 with 2 x 19.99 and 1 x 5.50.
+// The price lives on each item: it is the price at the moment of purchase.
 const makeOrder = (overrides = {}) => ({
     id: 'order-1',
     userId: 'customer-1',
-    productId: 'prod-1',
     status: 'PENDING',
     createdAt: '2026-10-23T00:00:00.000Z',
     carts: [
-        { id: 'c1', quantity: 2, productId: 'prod-1', orderId: 'order-1', products: { id: 'prod-1', name: 'Mouse', price: '19.99' } },
-        { id: 'c2', quantity: 1, productId: 'prod-2', orderId: 'order-1', products: { id: 'prod-2', name: 'Mousepad', price: '5.50' } }
+        { id: 'c1', quantity: 2, price: '19.99', productId: 'prod-1', orderId: 'order-1', products: { id: 'prod-1', name: 'Mouse' } },
+        { id: 'c2', quantity: 1, price: '5.50', productId: 'prod-2', orderId: 'order-1', products: { id: 'prod-2', name: 'Mousepad' } }
     ],
     ...overrides
 })
