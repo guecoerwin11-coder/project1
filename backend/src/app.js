@@ -10,6 +10,8 @@ const app = express()
 
 app.use(express.json())
 
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }))
+
 // API documentation
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 app.get('/api-docs.json', (req, res) => res.json(swaggerSpec))

@@ -23,10 +23,19 @@ jest.unstable_mockModule('../src/logger/logger.js', () => ({
     default: { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
 }))
 
+// Fake order queue, so tests never need Redis
+const queueMock = {
+    enqueueOrder: jest.fn(),
+    getOrderJob: jest.fn(),
+    describeOrderJob: jest.fn()
+}
+jest.unstable_mockModule('../src/queues/orderQueue.js', () => queueMock)
+
 process.env.JWT_PASS = 'test-access-secret'
 
 const { default: request } = await import('supertest')
 const { default: app } = await import('../src/app.js')
+const { ServiceUnavailable } = await import('../src/utils/errorClass.js')
 
 const makeAuth = (id, roles) => {
     const token = jwt.sign({ id, userName: id, email: `${id}@example.com`, roles }, process.env.JWT_PASS)
@@ -118,30 +127,39 @@ describe('GET /api/orders/:id', () => {
 
 describe('POST /api/orders', () => {
     beforeEach(() => {
-        prismaMock.product.updateMany.mockResolvedValue({ count: 1 })
-        prismaMock.order.create.mockImplementation(async ({ data }) => makeOrder({
-            userId: data.userId,
-            carts: data.carts.create.map((item, i) => ({
-                id: `c${i}`, ...item, orderId: 'order-1',
-                products: { id: item.productId, name: 'Item', price: '10.00' }
-            }))
-        }))
+        queueMock.enqueueOrder.mockResolvedValue({ job: { id: 'job-1' }, alreadyQueued: false })
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-1', status: 'waiting', position: 1 })
     })
 
-    it('creates the order and reduces stock for each product', async () => {
+    it('queues the order and answers 202 with the job status', async () => {
         const res = await request(app)
             .post('/api/orders')
             .set(customer)
             .send({ items: [{ productId: 'prod-1', quantity: 2 }, { productId: 'prod-2', quantity: 1 }] })
 
-        expect(res.status).toBe(201)
-        expect(res.body.order.total).toBe('30.00')
-
-        expect(prismaMock.product.updateMany).toHaveBeenCalledWith({
-            where: { id: 'prod-1', stock: { gte: 2 } },
-            data: { stock: { decrement: 2 } }
+        expect(res.status).toBe(202)
+        expect(res.body).toMatchObject({
+            message: 'order queued',
+            jobId: 'job-1',
+            status: 'waiting',
+            position: 1,
+            statusUrl: '/api/orders/jobs/job-1'
         })
-        expect(prismaMock.product.updateMany).toHaveBeenCalledTimes(2)
+        expect(queueMock.enqueueOrder).toHaveBeenCalledWith({
+            userId: 'customer-1',
+            items: [{ productId: 'prod-1', quantity: 2 }, { productId: 'prod-2', quantity: 1 }],
+            source: 'direct'
+        })
+    })
+
+    it('does not touch the database, the worker does that', async () => {
+        await request(app)
+            .post('/api/orders')
+            .set(customer)
+            .send({ items: [{ productId: 'prod-1', quantity: 1 }] })
+
+        expect(prismaMock.$transaction).not.toHaveBeenCalled()
+        expect(prismaMock.order.create).not.toHaveBeenCalled()
     })
 
     it('takes the user id from the token, not from the body', async () => {
@@ -150,7 +168,7 @@ describe('POST /api/orders', () => {
             .set(customer)
             .send({ userId: 'someone-else', items: [{ productId: 'prod-1', quantity: 1 }] })
 
-        expect(prismaMock.order.create.mock.calls[0][0].data.userId).toBe('customer-1')
+        expect(queueMock.enqueueOrder.mock.calls[0][0].userId).toBe('customer-1')
     })
 
     it('combines duplicate products into one line', async () => {
@@ -159,17 +177,16 @@ describe('POST /api/orders', () => {
             .set(customer)
             .send({ items: [{ productId: 'prod-1', quantity: 2 }, { productId: 'prod-1', quantity: 3 }] })
 
-        expect(prismaMock.product.updateMany).toHaveBeenCalledTimes(1)
-        expect(prismaMock.order.create.mock.calls[0][0].data.carts.create).toEqual([
+        expect(queueMock.enqueueOrder.mock.calls[0][0].items).toEqual([
             { productId: 'prod-1', quantity: 5 }
         ])
     })
 
-    it('returns 400 when items is empty', async () => {
+    it('returns 400 when items is empty, without queueing', async () => {
         const res = await request(app).post('/api/orders').set(customer).send({ items: [] })
 
         expect(res.status).toBe(400)
-        expect(prismaMock.$transaction).not.toHaveBeenCalled()
+        expect(queueMock.enqueueOrder).not.toHaveBeenCalled()
     })
 
     it('returns 400 when a quantity is not a positive whole number', async () => {
@@ -179,6 +196,7 @@ describe('POST /api/orders', () => {
             .send({ items: [{ productId: 'prod-1', quantity: 0 }] })
 
         expect(res.status).toBe(400)
+        expect(queueMock.enqueueOrder).not.toHaveBeenCalled()
     })
 
     it('returns 400 when combined quantity is over 100', async () => {
@@ -190,31 +208,87 @@ describe('POST /api/orders', () => {
         expect(res.status).toBe(400)
     })
 
-    it('returns 400 and saves nothing when stock is too low', async () => {
-        prismaMock.product.updateMany.mockResolvedValue({ count: 0 })
-        prismaMock.product.findUnique.mockResolvedValue({ name: 'Mouse', stock: 1 })
+    it('returns 503 when the queue is down', async () => {
+        queueMock.enqueueOrder.mockRejectedValue(new ServiceUnavailable('order queue is unavailable, please try again'))
 
         const res = await request(app)
             .post('/api/orders')
             .set(customer)
-            .send({ items: [{ productId: 'prod-1', quantity: 5 }] })
+            .send({ items: [{ productId: 'prod-1', quantity: 1 }] })
 
-        expect(res.status).toBe(400)
-        expect(res.body.error.message).toBe('not enough stock for Mouse, only 1 left')
-        expect(prismaMock.order.create).not.toHaveBeenCalled()
+        expect(res.status).toBe(503)
+        expect(res.body.error.message).toBe('order queue is unavailable, please try again')
+    })
+})
+
+describe('GET /api/orders/jobs/:jobId', () => {
+    // A fake BullMQ job owned by customer-1
+    const job = { id: 'job-1', data: { userId: 'customer-1' } }
+
+    it('returns 401 without a token', async () => {
+        const res = await request(app).get('/api/orders/jobs/job-1')
+
+        expect(res.status).toBe(401)
     })
 
-    it('returns 404 when a product does not exist', async () => {
-        prismaMock.product.updateMany.mockResolvedValue({ count: 0 })
-        prismaMock.product.findUnique.mockResolvedValue(null)
+    it('shows the owner their place in line', async () => {
+        queueMock.getOrderJob.mockResolvedValue(job)
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-1', status: 'waiting', position: 4 })
 
-        const res = await request(app)
-            .post('/api/orders')
-            .set(customer)
-            .send({ items: [{ productId: 'missing', quantity: 1 }] })
+        const res = await request(app).get('/api/orders/jobs/job-1').set(customer)
+
+        expect(res.status).toBe(200)
+        expect(res.body).toEqual({ jobId: 'job-1', status: 'waiting', position: 4 })
+    })
+
+    it('includes the full order once completed', async () => {
+        queueMock.getOrderJob.mockResolvedValue(job)
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-1', status: 'completed', orderId: 'order-1' })
+        prismaMock.order.findUnique.mockResolvedValue(makeOrder())
+
+        const res = await request(app).get('/api/orders/jobs/job-1').set(customer)
+
+        expect(res.status).toBe(200)
+        expect(res.body.order.id).toBe('order-1')
+        expect(res.body.order.total).toBe('45.48')
+    })
+
+    it('shows the reason when the job failed', async () => {
+        queueMock.getOrderJob.mockResolvedValue(job)
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-1', status: 'failed', error: 'not enough stock for Mouse, only 1 left' })
+
+        const res = await request(app).get('/api/orders/jobs/job-1').set(customer)
+
+        expect(res.status).toBe(200)
+        expect(res.body.error).toBe('not enough stock for Mouse, only 1 left')
+        expect(prismaMock.order.findUnique).not.toHaveBeenCalled()
+    })
+
+    it('returns 404 to a different customer', async () => {
+        queueMock.getOrderJob.mockResolvedValue(job)
+
+        const res = await request(app).get('/api/orders/jobs/job-1').set(otherCustomer)
 
         expect(res.status).toBe(404)
-        expect(prismaMock.order.create).not.toHaveBeenCalled()
+        expect(queueMock.describeOrderJob).not.toHaveBeenCalled()
+    })
+
+    it('lets an admin see any job', async () => {
+        queueMock.getOrderJob.mockResolvedValue(job)
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-1', status: 'processing' })
+
+        const res = await request(app).get('/api/orders/jobs/job-1').set(admin)
+
+        expect(res.status).toBe(200)
+        expect(res.body.status).toBe('processing')
+    })
+
+    it('returns 404 when the job does not exist or expired', async () => {
+        queueMock.getOrderJob.mockResolvedValue(null)
+
+        const res = await request(app).get('/api/orders/jobs/old-job').set(customer)
+
+        expect(res.status).toBe(404)
     })
 })
 

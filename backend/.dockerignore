@@ -1,0 +1,24 @@
+# Files Docker never copies into the image.
+# Keeps the image small and keeps secrets out of it.
+
+node_modules
+generated
+logs
+coverage
+
+# Secrets: pass them as environment variables instead
+.env
+.env.*
+
+# Not needed to run the app
+tests
+*.md
+.git
+.gitignore
+.dockerignore
+Dockerfile
+.claude
+.windsurf
+.agents
+skills-lock.json
+_*.mjs

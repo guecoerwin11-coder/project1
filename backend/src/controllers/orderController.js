@@ -1,7 +1,8 @@
 import prisma from "../configs/postgres.js";
 import { BadRequest, NotFound } from "../utils/errorClass.js";
 import logger from "../logger/logger.js";
-import { MAX_ITEMS, MAX_QUANTITY, orderInclude, withTotal, placeOrder } from "../services/orderService.js";
+import { MAX_ITEMS, MAX_QUANTITY, orderInclude, withTotal } from "../services/orderService.js";
+import { enqueueOrder, getOrderJob, describeOrderJob } from "../queues/orderQueue.js";
 
 // Which status an order may move to from its current status
 const ALLOWED_TRANSITIONS = {
@@ -108,23 +109,56 @@ const getOrderById = async (req, res, next) => {
 
 // POST /orders
 // Body: { items: [{ productId, quantity }] }
-// Reduces stock and creates the order together. If anything fails, nothing is saved.
+// Checks the input right away, then puts the order in the queue and answers 202.
+// A worker places the order later. Poll GET /orders/jobs/:jobId for the result.
 const createOrder = async (req, res, next) => {
     try{
         const items = validateItems(req.body.items)
 
-        const order = await prisma.$transaction(
-            (tx) => placeOrder(tx, req.user.id, items)
-        )
+        const { job } = await enqueueOrder({ userId: req.user.id, items, source: 'direct' })
 
         logger.info({
-            message: "Order created",
-            orderId: order.id,
+            message: "Order queued",
+            jobId: job.id,
             userId: req.user.id,
             items: items.length
         })
 
-        res.status(201).json({ message: "order created", order: withTotal(order) })
+        res.status(202).json({
+            message: "order queued",
+            ...(await describeOrderJob(job)),
+            statusUrl: `/api/orders/jobs/${job.id}`
+        })
+    }catch(err){
+        next(err)
+    }
+}
+
+// GET /orders/jobs/:jobId
+// Shows where a queued order is: waiting (with place in line), processing,
+// completed (with the order), or failed (with the reason).
+// Other users' jobs return 404, like other users' orders.
+const getOrderJobStatus = async (req, res, next) => {
+    try{
+        const job = await getOrderJob(req.params.jobId)
+
+        if(!job || (!isAdmin(req.user) && job.data.userId !== req.user.id)){
+            throw new NotFound("order job not found")
+        }
+
+        const summary = await describeOrderJob(job)
+
+        if(summary.status === 'completed' && summary.orderId){
+            const order = await prisma.order.findUnique({
+                where: { id: summary.orderId },
+                include: orderInclude
+            })
+            if(order){
+                summary.order = withTotal(order)
+            }
+        }
+
+        res.status(200).json(summary)
     }catch(err){
         next(err)
     }
@@ -199,5 +233,5 @@ const cancelOrder = async (req, res, next) => {
 }
 
 export {
-    getOrders, getOrderById, createOrder, updateOrderStatus, cancelOrder
+    getOrders, getOrderById, createOrder, getOrderJobStatus, updateOrderStatus, cancelOrder
 }

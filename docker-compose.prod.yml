@@ -1,0 +1,97 @@
+# Production stack, used on the server by the CD deploy job.
+# It runs the image published to GitHub Container Registry instead of building.
+#
+# On the server, next to this file, create a .env file with:
+#   BACKEND_IMAGE=ghcr.io/<owner>/<repo>/backend:latest   (CD sets this for you)
+#   POSTGRES_PASSWORD=<a long random password>
+#   JWT_PASS=<a long random secret>
+#   JWT_FRESH=<another long random secret>
+#
+# Start by hand:  docker compose -f docker-compose.prod.yml up -d
+
+name: eshop
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}
+  environment: &backend-env
+    NODE_ENV: production
+    DATABASE_URL: postgresql://eshop:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/eshop
+    REDIS_URL: redis://redis:6379
+    JWT_PASS: ${JWT_PASS:?set JWT_PASS}
+    JWT_FRESH: ${JWT_FRESH:?set JWT_FRESH}
+  init: true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: eshop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: eshop
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No ports: the database is only reachable by the other containers
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eshop -d eshop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["npm", "run", "migrate:deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    <<: *backend
+    command: ["node", "worker.js"]
+    environment:
+      <<: *backend-env
+      ORDER_WORKER_CONCURRENCY: ${ORDER_WORKER_CONCURRENCY:-1}
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

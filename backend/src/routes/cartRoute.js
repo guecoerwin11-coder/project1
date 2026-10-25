@@ -158,45 +158,33 @@ cartRouter.delete('/cart/items/:productId', removeCartItem)
  * @openapi
  * /cart/checkout:
  *   post:
- *     summary: Turn my cart into an order
+ *     summary: Turn my cart into an order (queued)
  *     description: >
- *       Reduces stock, creates the order, and empties the cart together.
- *       If any product is out of stock, nothing changes and the cart is kept.
+ *       Puts the cart's current contents in the order queue and answers 202.
+ *       A worker then reduces stock, creates the order, and removes those products
+ *       from the cart together. If stock ran out, the job fails and the cart is kept.
+ *       Poll statusUrl for the result. Clicking checkout again while a checkout is
+ *       still waiting returns the same job instead of making a second order.
  *     tags: [Cart]
  *     security:
  *       - bearerAuth: []
  *     responses:
- *       201:
- *         description: Order placed
+ *       202:
+ *         description: Checkout accepted and waiting in the queue
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: order placed
- *                 order:
- *                   $ref: '#/components/schemas/Order'
+ *               $ref: '#/components/schemas/QueuedOrderResponse'
  *       400:
- *         description: Cart is empty, or a product does not have enough stock
+ *         description: Cart is empty
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
- *             example:
- *               success: false
- *               error:
- *                 message: not enough stock for Wireless Mouse, only 2 left
- *                 status: 400
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
- *       404:
- *         description: A product in the cart was deleted
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *       503:
+ *         $ref: '#/components/responses/QueueUnavailable'
  */
 cartRouter.post('/cart/checkout', checkout)
 

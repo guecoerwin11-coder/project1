@@ -2,7 +2,7 @@ import express from 'express'
 import validation from '../middleware/validation.js'
 import isAuthorize from '../middleware/isAuthorize.js'
 import {
-    getOrders, getOrderById, createOrder, updateOrderStatus, cancelOrder
+    getOrders, getOrderById, createOrder, getOrderJobStatus, updateOrderStatus, cancelOrder
 } from '../controllers/orderController.js'
 
 const orderRouter = express.Router()
@@ -44,10 +44,12 @@ const canManageOrders = isAuthorize('ADMIN', 'SELLER')
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *   post:
- *     summary: Place an order
+ *     summary: Place an order (queued)
  *     description: >
- *       Reduces stock and creates the order together. If any product is missing
- *       or out of stock, nothing is saved. Duplicate products are combined into one line.
+ *       Checks the items right away, then puts the order in the queue and answers 202.
+ *       A worker places orders one by one in arrival order. Poll statusUrl to see
+ *       the result. Stock problems show up there as a failed job.
+ *       Duplicate products are combined into one line.
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []
@@ -58,40 +60,73 @@ const canManageOrders = isAuthorize('ADMIN', 'SELLER')
  *           schema:
  *             $ref: '#/components/schemas/CreateOrderRequest'
  *     responses:
- *       201:
- *         description: Order created
+ *       202:
+ *         description: Order accepted and waiting in the queue
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: order created
- *                 order:
- *                   $ref: '#/components/schemas/Order'
+ *               $ref: '#/components/schemas/QueuedOrderResponse'
  *       400:
- *         description: Invalid items or not enough stock
+ *         description: Invalid items
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
- *             example:
- *               success: false
- *               error:
- *                 message: not enough stock for Wireless Mouse, only 2 left
- *                 status: 400
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
- *       404:
- *         description: A product in the order does not exist
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *       503:
+ *         $ref: '#/components/responses/QueueUnavailable'
  */
 orderRouter.get('/orders', getOrders)
 orderRouter.post('/orders', createOrder)
+
+/**
+ * @openapi
+ * /orders/jobs/{jobId}:
+ *   get:
+ *     summary: Check a queued order
+ *     description: >
+ *       Use the jobId from POST /orders or POST /cart/checkout. Poll every few
+ *       seconds until status is completed or failed. Only the user who queued it,
+ *       or an admin, can see it.
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: jobId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The job's current status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/OrderJobStatus'
+ *             examples:
+ *               waiting:
+ *                 summary: Still in line
+ *                 value: { jobId: '42', status: waiting, position: 3 }
+ *               completed:
+ *                 summary: Order placed
+ *                 value: { jobId: '42', status: completed, orderId: '3f1c2a9e-8b7d-4c1e-9a2b-1d2e3f4a5b6c', order: { id: '3f1c2a9e-8b7d-4c1e-9a2b-1d2e3f4a5b6c', status: PENDING, total: '39.98', carts: [] } }
+ *               failed:
+ *                 summary: Out of stock
+ *                 value: { jobId: '42', status: failed, error: 'not enough stock for Wireless Mouse, only 1 left' }
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       404:
+ *         description: Job does not exist, expired, or belongs to someone else
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       503:
+ *         $ref: '#/components/responses/QueueUnavailable'
+ */
+orderRouter.get('/orders/jobs/:jobId', getOrderJobStatus)
 
 /**
  * @openapi

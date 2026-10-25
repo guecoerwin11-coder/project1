@@ -1,0 +1,115 @@
+# CI = Continuous Integration
+# Runs on every pull request and every push to a branch other than main.
+# The CD workflow also runs it before publishing, so main is checked too.
+#
+# Jobs (they run in parallel):
+#   test        unit and API tests
+#   migrations  migrations apply to a real Postgres, and schema.prisma has no missing migration
+#   docker      the Docker image still builds
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the older, now outdated run
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: backend/.nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --config prisma7.config.js
+
+      - name: Run tests
+        run: npm test
+        env:
+          # Tests sign their own tokens, these only need to exist
+          JWT_PASS: ci-test-secret
+          JWT_FRESH: ci-test-refresh-secret
+
+  migrations:
+    name: Database migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: eshop_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/eshop_ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: backend/.nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply all migrations to an empty database
+        run: npm run migrate:deploy
+
+      - name: Check schema.prisma has no change without a migration
+        run: |
+          if ! npx prisma migrate diff --config prisma7.config.js \
+               --from-config-datasource --to-schema prisma/schema.prisma --exit-code; then
+            echo "::error::schema.prisma has changes with no migration. Run: npx prisma migrate dev --name <name> --config prisma7.config.js"
+            exit 1
+          fi
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

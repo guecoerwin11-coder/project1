@@ -143,6 +143,31 @@ const options = {
                         status: { type: 'string', enum: ['PENDING', 'SHIPPED', 'RECEIVE', 'CANCEL'], example: 'SHIPPED' }
                     }
                 },
+                QueuedOrderResponse: {
+                    type: 'object',
+                    properties: {
+                        message: { type: 'string', example: 'order queued' },
+                        jobId: { type: 'string', example: '42' },
+                        status: { type: 'string', enum: ['waiting', 'processing', 'retrying', 'completed', 'failed'], example: 'waiting' },
+                        position: { type: 'integer', description: 'Place in line while waiting. 1 means next.', example: 3 },
+                        statusUrl: { type: 'string', example: '/api/orders/jobs/42' }
+                    }
+                },
+                OrderJobStatus: {
+                    type: 'object',
+                    properties: {
+                        jobId: { type: 'string', example: '42' },
+                        status: {
+                            type: 'string',
+                            enum: ['waiting', 'processing', 'retrying', 'completed', 'failed'],
+                            description: 'waiting = in line, processing = being placed now, retrying = unexpected error and trying again, completed = order placed, failed = could not be placed'
+                        },
+                        position: { type: 'integer', description: 'Only when waiting. 1 means next.' },
+                        orderId: { type: 'string', format: 'uuid', description: 'Only when completed' },
+                        order: { $ref: '#/components/schemas/Order' },
+                        error: { type: 'string', description: 'Only when failed', example: 'not enough stock for Wireless Mouse, only 1 left' }
+                    }
+                },
                 CartLine: {
                     type: 'object',
                     properties: {
@@ -218,6 +243,14 @@ const options = {
                 },
                 OrderNotFound: {
                     description: 'Order does not exist, or belongs to someone else',
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorResponse' }
+                        }
+                    }
+                },
+                QueueUnavailable: {
+                    description: 'The order queue (Redis) is down. Try again later.',
                     content: {
                         'application/json': {
                             schema: { $ref: '#/components/schemas/ErrorResponse' }

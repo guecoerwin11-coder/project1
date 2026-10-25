@@ -26,10 +26,19 @@ jest.unstable_mockModule('../src/logger/logger.js', () => ({
     default: { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
 }))
 
+// Fake order queue, so tests never need Redis
+const queueMock = {
+    enqueueOrder: jest.fn(),
+    getOrderJob: jest.fn(),
+    describeOrderJob: jest.fn()
+}
+jest.unstable_mockModule('../src/queues/orderQueue.js', () => queueMock)
+
 process.env.JWT_PASS = 'test-access-secret'
 
 const { default: request } = await import('supertest')
 const { default: app } = await import('../src/app.js')
+const { ServiceUnavailable } = await import('../src/utils/errorClass.js')
 
 const token = jwt.sign({ id: 'user-1', roles: 'CUSTOMER' }, process.env.JWT_PASS)
 const auth = { Authorization: `Bearer ${token}` }
@@ -275,63 +284,65 @@ describe('DELETE /api/cart', () => {
 
 describe('POST /api/cart/checkout', () => {
     beforeEach(() => {
-        prismaMock.product.updateMany.mockResolvedValue({ count: 1 })
-        prismaMock.cartItem.deleteMany.mockResolvedValue({ count: 2 })
-        prismaMock.order.create.mockImplementation(async ({ data }) => ({
-            id: 'order-1',
-            userId: data.userId,
-            status: 'PENDING',
-            carts: data.carts.create.map((item, i) => ({
-                id: `c${i}`, ...item, orderId: 'order-1',
-                products: item.productId === 'prod-1' ? mouse : pad
-            }))
-        }))
+        queueMock.enqueueOrder.mockResolvedValue({ job: { id: 'job-7' }, alreadyQueued: false })
+        queueMock.describeOrderJob.mockResolvedValue({ jobId: 'job-7', status: 'waiting', position: 2 })
     })
 
-    it('creates an order from the cart and empties the cart', async () => {
+    it('queues the cart contents and answers 202', async () => {
         prismaMock.cartItem.findMany.mockResolvedValue([line(mouse, 2), line(pad, 1)])
 
         const res = await request(app).post('/api/cart/checkout').set(auth)
 
-        expect(res.status).toBe(201)
-        expect(res.body.message).toBe('order placed')
-        expect(res.body.order.total).toBe('45.48')
-        expect(prismaMock.order.create.mock.calls[0][0].data.carts.create).toEqual([
-            { productId: 'prod-1', quantity: 2 },
-            { productId: 'prod-2', quantity: 1 }
-        ])
-        expect(prismaMock.cartItem.deleteMany).toHaveBeenCalledWith({ where: { userId: 'user-1' } })
+        expect(res.status).toBe(202)
+        expect(res.body).toMatchObject({
+            message: 'order queued',
+            jobId: 'job-7',
+            status: 'waiting',
+            position: 2,
+            statusUrl: '/api/orders/jobs/job-7'
+        })
+        expect(queueMock.enqueueOrder).toHaveBeenCalledWith({
+            userId: 'user-1',
+            items: [{ productId: 'prod-1', quantity: 2 }, { productId: 'prod-2', quantity: 1 }],
+            source: 'cart'
+        })
     })
 
-    it('reduces stock for every product', async () => {
+    it('leaves the cart and stock alone, the worker does that', async () => {
         prismaMock.cartItem.findMany.mockResolvedValue([line(mouse, 2)])
 
         await request(app).post('/api/cart/checkout').set(auth)
 
-        expect(prismaMock.product.updateMany).toHaveBeenCalledWith({
-            where: { id: 'prod-1', stock: { gte: 2 } },
-            data: { stock: { decrement: 2 } }
-        })
+        expect(prismaMock.cartItem.deleteMany).not.toHaveBeenCalled()
+        expect(prismaMock.product.updateMany).not.toHaveBeenCalled()
+        expect(prismaMock.order.create).not.toHaveBeenCalled()
     })
 
-    it('returns 400 when the cart is empty', async () => {
+    it('says so when the same checkout is already waiting', async () => {
+        prismaMock.cartItem.findMany.mockResolvedValue([line(mouse, 2)])
+        queueMock.enqueueOrder.mockResolvedValue({ job: { id: 'job-7' }, alreadyQueued: true })
+
+        const res = await request(app).post('/api/cart/checkout').set(auth)
+
+        expect(res.status).toBe(202)
+        expect(res.body.message).toBe('your checkout is already in the queue')
+        expect(res.body.jobId).toBe('job-7')
+    })
+
+    it('returns 400 when the cart is empty, without queueing', async () => {
         const res = await request(app).post('/api/cart/checkout').set(auth)
 
         expect(res.status).toBe(400)
         expect(res.body.error.message).toBe('cart is empty')
-        expect(prismaMock.order.create).not.toHaveBeenCalled()
+        expect(queueMock.enqueueOrder).not.toHaveBeenCalled()
     })
 
-    it('keeps the cart and creates no order when stock ran out', async () => {
-        prismaMock.cartItem.findMany.mockResolvedValue([line(pad, 3)])
-        prismaMock.product.updateMany.mockResolvedValue({ count: 0 })
-        prismaMock.product.findUnique.mockResolvedValue({ name: 'Mousepad', stock: 1 })
+    it('returns 503 when the queue is down', async () => {
+        prismaMock.cartItem.findMany.mockResolvedValue([line(mouse, 2)])
+        queueMock.enqueueOrder.mockRejectedValue(new ServiceUnavailable('order queue is unavailable, please try again'))
 
         const res = await request(app).post('/api/cart/checkout').set(auth)
 
-        expect(res.status).toBe(400)
-        expect(res.body.error.message).toBe('not enough stock for Mousepad, only 1 left')
-        expect(prismaMock.order.create).not.toHaveBeenCalled()
-        expect(prismaMock.cartItem.deleteMany).not.toHaveBeenCalled()
+        expect(res.status).toBe(503)
     })
 })
