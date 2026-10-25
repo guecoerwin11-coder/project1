@@ -163,16 +163,24 @@ productRouter.post('/products', validation, canManageProducts, createProduct)
  *   delete:
  *     summary: Delete a product
  *     tags: [Products]
- *     description: Requires the ADMIN or SELLER role.
+ *     description: >
+ *       Requires the ADMIN or SELLER role. A product that was never ordered is
+ *       deleted. A product that appears in orders is archived instead: it is hidden
+ *       from the shop and removed from carts, but kept so order history still works.
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Product deleted
+ *         description: Product deleted or archived
  *         content:
  *           application/json:
- *             example:
- *               message: product deleted
+ *             examples:
+ *               deleted:
+ *                 summary: Never ordered, removed for good
+ *                 value: { message: product deleted, archived: false }
+ *               archived:
+ *                 summary: Has orders, kept for history
+ *                 value: { message: 'product archived, it is kept for order history', archived: true }
  *       401:
  *         description: Missing, invalid or expired token
  *         content:

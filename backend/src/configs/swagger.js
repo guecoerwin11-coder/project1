@@ -88,6 +88,7 @@ const options = {
                     properties: {
                         id: { type: 'string', format: 'uuid' },
                         quantity: { type: 'integer', example: 2 },
+                        price: { type: 'string', description: 'Price per unit at the moment of purchase', example: '19.99' },
                         productId: { type: 'string', format: 'uuid' },
                         orderId: { type: 'string', format: 'uuid' },
                         createdAt: { type: 'string', format: 'date-time' },
@@ -95,8 +96,7 @@ const options = {
                             type: 'object',
                             properties: {
                                 id: { type: 'string', format: 'uuid' },
-                                name: { type: 'string', example: 'Wireless Mouse' },
-                                price: { type: 'string', example: '19.99' }
+                                name: { type: 'string', example: 'Wireless Mouse' }
                             }
                         }
                     }
@@ -106,7 +106,6 @@ const options = {
                     properties: {
                         id: { type: 'string', format: 'uuid' },
                         userId: { type: 'string', format: 'uuid' },
-                        productId: { type: 'string', format: 'uuid', description: 'First product in the order. See carts for the full list.' },
                         status: { type: 'string', enum: ['PENDING', 'SHIPPED', 'RECEIVE', 'CANCEL'], example: 'PENDING' },
                         createdAt: { type: 'string', format: 'date-time' },
                         carts: {
@@ -114,7 +113,7 @@ const options = {
                             description: 'The items in the order',
                             items: { $ref: '#/components/schemas/OrderItem' }
                         },
-                        total: { type: 'string', description: 'Sum of price times quantity, using current product prices', example: '39.98' }
+                        total: { type: 'string', description: 'Sum of price times quantity, using the prices saved at purchase', example: '39.98' }
                     }
                 },
                 CreateOrderRequest: {
