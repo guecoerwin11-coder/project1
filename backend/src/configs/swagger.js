@@ -59,6 +59,15 @@ const options = {
                         description: { type: 'string', nullable: true, example: 'Ergonomic 2.4GHz mouse' },
                         price: { type: 'string', description: 'Decimal with 2 places, returned as a string', example: '19.99' },
                         stock: { type: 'integer', example: 50 },
+                        sellerId: { type: 'string', format: 'uuid', nullable: true, description: 'Owner. Empty for old products, which only admins can change.' },
+                        seller: {
+                            type: 'object',
+                            nullable: true,
+                            properties: {
+                                id: { type: 'string', format: 'uuid' },
+                                userName: { type: 'string', example: 'mouse_shop' }
+                            }
+                        },
                         createdAt: { type: 'string', format: 'date-time' },
                         updatedAt: { type: 'string', format: 'date-time' }
                     }
