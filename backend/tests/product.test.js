@@ -9,7 +9,16 @@ const prismaMock = {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn()
-    }
+    },
+    // Order items, used to check if a product was ever ordered
+    cart: {
+        count: jest.fn()
+    },
+    cartItem: {
+        deleteMany: jest.fn()
+    },
+    // The array form of a transaction: run all the queries, all or nothing
+    $transaction: jest.fn(async (queries) => Promise.all(queries))
 }
 jest.unstable_mockModule('../src/configs/postgres.js', () => ({ default: prismaMock }))
 jest.unstable_mockModule('../src/logger/logger.js', () => ({
@@ -50,6 +59,35 @@ describe('GET /api/products', () => {
         expect(res.status).toBe(200)
         expect(res.body.products).toHaveLength(1)
         expect(res.body.products[0].name).toBe('Wireless Mouse')
+    })
+
+    it('hides archived products', async () => {
+        prismaMock.product.findMany.mockResolvedValue([])
+
+        await request(app).get('/api/products')
+
+        expect(prismaMock.product.findMany.mock.calls[0][0].where).toEqual({ archivedAt: null })
+    })
+})
+
+describe('archived products', () => {
+    const archived = { ...sampleProduct, archivedAt: '2026-10-25T00:00:00.000Z' }
+
+    it('return 404 when looked up by id', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(archived)
+
+        const res = await request(app).get('/api/products/prod-1')
+
+        expect(res.status).toBe(404)
+    })
+
+    it('cannot be updated', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(archived)
+
+        const res = await request(app).put('/api/products/prod-1').set(auth).send({ stock: 5 })
+
+        expect(res.status).toBe(404)
+        expect(prismaMock.product.update).not.toHaveBeenCalled()
     })
 })
 
@@ -236,8 +274,9 @@ describe('PUT /api/products/:id', () => {
 })
 
 describe('DELETE /api/products/:id', () => {
-    it('deletes the product when logged in', async () => {
+    it('deletes a product that was never ordered', async () => {
         prismaMock.product.findUnique.mockResolvedValue(sampleProduct)
+        prismaMock.cart.count.mockResolvedValue(0)
         prismaMock.product.delete.mockResolvedValue(sampleProduct)
 
         const res = await request(app)
@@ -245,7 +284,39 @@ describe('DELETE /api/products/:id', () => {
             .set(auth)
 
         expect(res.status).toBe(200)
-        expect(res.body.message).toBe('product deleted')
+        expect(res.body).toEqual({ message: 'product deleted', archived: false })
+        expect(prismaMock.product.delete).toHaveBeenCalledWith({ where: { id: 'prod-1' } })
+    })
+
+    it('archives a product that appears in orders, keeping order history', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(sampleProduct)
+        prismaMock.cart.count.mockResolvedValue(3)
+        prismaMock.product.update.mockResolvedValue({})
+        prismaMock.cartItem.deleteMany.mockResolvedValue({ count: 1 })
+
+        const res = await request(app)
+            .delete('/api/products/prod-1')
+            .set(auth)
+
+        expect(res.status).toBe(200)
+        expect(res.body.archived).toBe(true)
+        expect(prismaMock.product.delete).not.toHaveBeenCalled()
+
+        const update = prismaMock.product.update.mock.calls[0][0]
+        expect(update.where).toEqual({ id: 'prod-1' })
+        expect(update.data.archivedAt).toBeInstanceOf(Date)
+        expect(update.data.stock).toBe(0)
+    })
+
+    it('removes an archived product from everyone\'s carts', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(sampleProduct)
+        prismaMock.cart.count.mockResolvedValue(1)
+        prismaMock.product.update.mockResolvedValue({})
+        prismaMock.cartItem.deleteMany.mockResolvedValue({ count: 4 })
+
+        await request(app).delete('/api/products/prod-1').set(auth)
+
+        expect(prismaMock.cartItem.deleteMany).toHaveBeenCalledWith({ where: { productId: 'prod-1' } })
     })
 
     it('returns 403 for a CUSTOMER', async () => {
