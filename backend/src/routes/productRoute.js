@@ -23,6 +23,14 @@ const canManageProducts = isAuthorize('ADMIN', 'SELLER')
  *   get:
  *     summary: List all products
  *     tags: [Products]
+ *     parameters:
+ *       - in: query
+ *         name: sellerId
+ *         required: false
+ *         description: Only show products from this seller
+ *         schema:
+ *           type: string
+ *           format: uuid
  *     responses:
  *       200:
  *         description: List of products, newest first
@@ -113,7 +121,7 @@ productRouter.post('/products', validation, canManageProducts, createProduct)
  *               $ref: '#/components/schemas/ErrorResponse'
  *   put:
  *     summary: Update a product
- *     description: Requires the ADMIN or SELLER role. Send only the fields you want to change.
+ *     description: Requires the ADMIN or SELLER role. Sellers can only change their own products. Send only the fields you want to change.
  *     tags: [Products]
  *     security:
  *       - bearerAuth: []
@@ -149,7 +157,7 @@ productRouter.post('/products', validation, canManageProducts, createProduct)
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
- *         description: Logged in, but role is not ADMIN or SELLER
+ *         description: Role is not ADMIN or SELLER, or a seller tried to change another seller's product
  *         content:
  *           application/json:
  *             schema:
@@ -164,7 +172,7 @@ productRouter.post('/products', validation, canManageProducts, createProduct)
  *     summary: Delete a product
  *     tags: [Products]
  *     description: >
- *       Requires the ADMIN or SELLER role. A product that was never ordered is
+ *       Requires the ADMIN or SELLER role. Sellers can only delete their own products. A product that was never ordered is
  *       deleted. A product that appears in orders is archived instead: it is hidden
  *       from the shop and removed from carts, but kept so order history still works.
  *     security:
@@ -188,7 +196,7 @@ productRouter.post('/products', validation, canManageProducts, createProduct)
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
- *         description: Logged in, but role is not ADMIN or SELLER
+ *         description: Role is not ADMIN or SELLER, or a seller tried to change another seller's product
  *         content:
  *           application/json:
  *             schema:

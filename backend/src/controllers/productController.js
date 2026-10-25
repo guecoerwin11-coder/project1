@@ -1,6 +1,22 @@
 import prisma from '../configs/postgres.js'
-import { BadRequest, NotFound } from '../utils/errorClass.js'
+import { BadRequest, NotFound, Forbidden } from '../utils/errorClass.js'
 import logger from '../logger/logger.js'
+
+// Every product response shows who sells it (never their email or password)
+const productInclude = {
+    seller: { select: { id: true, userName: true } }
+}
+
+// Admins can change any product. Sellers can only change products they own.
+// Products with no owner (created before ownership existed) are admin only.
+const assertCanManage = (user, product) => {
+    if(user.roles === 'ADMIN'){
+        return
+    }
+    if(!product.sellerId || product.sellerId !== user.id){
+        throw new Forbidden("you can only change your own products")
+    }
+}
 
 // Checks the body and returns only the allowed fields.
 // When partial is true (updates), missing fields are allowed.
@@ -45,7 +61,7 @@ const validateProduct = (body, partial = false) => {
 }
 
 const findProductOrFail = async (id) => {
-    const product = await prisma.product.findUnique({ where: { id } })
+    const product = await prisma.product.findUnique({ where: { id }, include: productInclude })
     // Archived products are kept for order history, but act as deleted everywhere else
     if(!product || product.archivedAt){
         throw new NotFound("product not found")
@@ -53,10 +69,18 @@ const findProductOrFail = async (id) => {
     return product
 }
 
+// GET /products
+// Optional: ?sellerId=<id> shows only that seller's products, like a shop page
 const getProducts = async (req, res, next) => {
     try{
+        const where = { archivedAt: null }
+        if(typeof req.query.sellerId === 'string' && req.query.sellerId !== ''){
+            where.sellerId = req.query.sellerId
+        }
+
         const products = await prisma.product.findMany({
-            where: { archivedAt: null },
+            where,
+            include: productInclude,
             orderBy: { createdAt: 'desc' }
         })
         res.status(200).json({ products })
@@ -77,7 +101,11 @@ const getProductById = async (req, res, next) => {
 const createProduct = async (req, res, next) => {
     try{
         const data = validateProduct(req.body)
-        const product = await prisma.product.create({ data })
+        // The owner always comes from the token, never from the request body
+        const product = await prisma.product.create({
+            data: { ...data, sellerId: req.user.id },
+            include: productInclude
+        })
 
         logger.info({
             message: "Product created",
@@ -94,11 +122,13 @@ const createProduct = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
     try{
         const data = validateProduct(req.body, true)
-        await findProductOrFail(req.params.id)
+        const existing = await findProductOrFail(req.params.id)
+        assertCanManage(req.user, existing)
 
         const product = await prisma.product.update({
             where: { id: req.params.id },
-            data
+            data,
+            include: productInclude
         })
 
         logger.info({
@@ -119,7 +149,8 @@ const updateProduct = async (req, res, next) => {
 const deleteProduct = async (req, res, next) => {
     try{
         const id = req.params.id
-        await findProductOrFail(id)
+        const existing = await findProductOrFail(id)
+        assertCanManage(req.user, existing)
 
         const timesOrdered = await prisma.cart.count({ where: { productId: id } })
 
