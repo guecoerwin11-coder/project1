@@ -143,6 +143,55 @@ const options = {
                         status: { type: 'string', enum: ['PENDING', 'SHIPPED', 'RECEIVE', 'CANCEL'], example: 'SHIPPED' }
                     }
                 },
+                CartLine: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        productId: { type: 'string', format: 'uuid' },
+                        quantity: { type: 'integer', example: 2 },
+                        product: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'string', format: 'uuid' },
+                                name: { type: 'string', example: 'Wireless Mouse' },
+                                price: { type: 'string', example: '19.99' },
+                                stock: { type: 'integer', example: 50 }
+                            }
+                        },
+                        subtotal: { type: 'string', description: 'price times quantity', example: '39.98' },
+                        inStock: { type: 'boolean', description: 'false if stock dropped below the quantity after it was added', example: true }
+                    }
+                },
+                Cart: {
+                    type: 'object',
+                    properties: {
+                        items: { type: 'array', items: { $ref: '#/components/schemas/CartLine' } },
+                        itemCount: { type: 'integer', description: 'Sum of all quantities', example: 3 },
+                        total: { type: 'string', example: '45.48' }
+                    }
+                },
+                CartResponse: {
+                    type: 'object',
+                    properties: {
+                        message: { type: 'string', example: 'added to cart' },
+                        cart: { $ref: '#/components/schemas/Cart' }
+                    }
+                },
+                AddToCartRequest: {
+                    type: 'object',
+                    required: ['productId'],
+                    properties: {
+                        productId: { type: 'string', format: 'uuid' },
+                        quantity: { type: 'integer', minimum: 1, maximum: 100, default: 1, example: 2 }
+                    }
+                },
+                UpdateCartItemRequest: {
+                    type: 'object',
+                    required: ['quantity'],
+                    properties: {
+                        quantity: { type: 'integer', minimum: 1, maximum: 100, example: 3 }
+                    }
+                },
                 ErrorResponse: {
                     type: 'object',
                     properties: {
@@ -174,6 +223,14 @@ const options = {
                             schema: { $ref: '#/components/schemas/ErrorResponse' }
                         }
                     }
+                },
+                CartItemNotFound: {
+                    description: 'That product is not in your cart',
+                    content: {
+                        'application/json': {
+                            schema: { $ref: '#/components/schemas/ErrorResponse' }
+                        }
+                    }
                 }
             },
             parameters: {
@@ -181,6 +238,13 @@ const options = {
                     in: 'path',
                     name: 'id',
                     required: true,
+                    schema: { type: 'string', format: 'uuid' }
+                },
+                CartProductId: {
+                    in: 'path',
+                    name: 'productId',
+                    required: true,
+                    description: 'The id of the product, not the cart line',
                     schema: { type: 'string', format: 'uuid' }
                 }
             }
