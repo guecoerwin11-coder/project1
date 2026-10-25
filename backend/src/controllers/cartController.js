@@ -1,7 +1,8 @@
 import prisma from "../configs/postgres.js";
 import { BadRequest, NotFound } from "../utils/errorClass.js";
 import logger  from "../logger/logger.js"
-import { MAX_ITEMS, MAX_QUANTITY, withTotal, placeOrder } from "../services/orderService.js";
+import { MAX_ITEMS, MAX_QUANTITY } from "../services/orderService.js";
+import { enqueueOrder, describeOrderJob } from "../queues/orderQueue.js";
 
 // Every cart line includes the product info the frontend needs to show it
 const cartInclude = {
@@ -175,39 +176,42 @@ const clearCart = async (req, res, next) => {
 }
 
 // POST /cart/checkout
-// Turns the cart into an order. Stock is reduced, the order is created, and the
-// cart is emptied together. If any product is out of stock, nothing changes.
+// Puts the cart's current contents in the order queue and answers 202 right away.
+// A worker places the order later: it reduces stock, creates the order, and removes
+// those products from the cart together. If stock ran out, the cart is kept.
+// Poll GET /orders/jobs/:jobId for the result.
 const checkout = async (req, res, next) => {
     try{
         const userId = req.user.id
 
-        const order = await prisma.$transaction(async (tx) => {
-            const items = await tx.cartItem.findMany({
-                where: { userId },
-                orderBy: { createdAt: 'asc' }
-            })
-            if(items.length === 0){
-                throw new BadRequest("cart is empty")
-            }
+        const items = await prisma.cartItem.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'asc' }
+        })
+        if(items.length === 0){
+            throw new BadRequest("cart is empty")
+        }
 
-            const created = await placeOrder(
-                tx,
-                userId,
-                items.map(item => ({ productId: item.productId, quantity: item.quantity }))
-            )
-
-            await tx.cartItem.deleteMany({ where: { userId } })
-            return created
+        const { job, alreadyQueued } = await enqueueOrder({
+            userId,
+            items: items.map(item => ({ productId: item.productId, quantity: item.quantity })),
+            source: 'cart'
         })
 
         logger.info({
-            message: "Checkout complete",
-            orderId: order.id,
+            message: alreadyQueued ? "Checkout already queued" : "Checkout queued",
+            jobId: job.id,
             userId,
-            items: order.carts.length
+            items: items.length
         })
 
-        res.status(201).json({ message: "order placed", order: withTotal(order) })
+        res.status(202).json({
+            message: alreadyQueued
+                ? "your checkout is already in the queue"
+                : "order queued",
+            ...(await describeOrderJob(job)),
+            statusUrl: `/api/orders/jobs/${job.id}`
+        })
     }catch(err){
         next(err)
     }
