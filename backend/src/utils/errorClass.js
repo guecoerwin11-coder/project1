@@ -38,6 +38,15 @@ class InternalServer extends Error{
     }
 }
 
+// A service the API depends on (like Redis) is down. The client can retry later.
+class ServiceUnavailable extends Error{
+    constructor(message){
+        super(message);
+        this.status = 503;
+        this.name = "Service Unavailable Error"
+    }
+}
+
 export {
-    BadRequest, Unauthorized, NotFound, Forbidden, InternalServer
+    BadRequest, Unauthorized, NotFound, Forbidden, InternalServer, ServiceUnavailable
 }
