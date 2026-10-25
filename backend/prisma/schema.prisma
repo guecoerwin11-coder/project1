@@ -28,6 +28,7 @@ model User {
 
   cartItems CartItem[]
   orders    Order[]
+  products  Product[]
 }
 
 model Product {
@@ -43,10 +44,17 @@ model Product {
   // order history still works, but the product is hidden and cannot be bought.
   archivedAt DateTime?
 
+  // The seller who owns this product. Only they, or an admin, can change it.
+  // Empty for products created before ownership existed: only admins can change those.
+  // Restrict: a seller who still has products cannot be deleted.
+  sellerId String?
+  seller   User?   @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+
   cart      Cart[]
   cartItems CartItem[]
 
   @@index([name, description])
+  @@index([sellerId])
 }
 
 enum STATUS {
