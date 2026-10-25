@@ -1,9 +1,7 @@
 import prisma from "../configs/postgres.js";
 import { BadRequest, NotFound } from "../utils/errorClass.js";
 import logger from "../logger/logger.js";
-
-const MAX_ITEMS = 50
-const MAX_QUANTITY = 100
+import { MAX_ITEMS, MAX_QUANTITY, orderInclude, withTotal, placeOrder } from "../services/orderService.js";
 
 // Which status an order may move to from its current status
 const ALLOWED_TRANSITIONS = {
@@ -13,25 +11,7 @@ const ALLOWED_TRANSITIONS = {
     CANCEL: []
 }
 
-// Every order response includes its items and the product info for each item
-const orderInclude = {
-    carts: {
-        include: {
-            products: { select: { id: true, name: true, price: true } }
-        }
-    }
-}
-
 const isAdmin = (user) => user.roles === 'ADMIN'
-
-// Adds a total, calculated from each item's product price times quantity
-const withTotal = (order) => {
-    const total = order.carts.reduce(
-        (sum, item) => sum + Number(item.products.price) * item.quantity,
-        0
-    )
-    return { ...order, total: total.toFixed(2) }
-}
 
 // Checks the items array and combines duplicate products into one line
 const validateItems = (items) => {
@@ -133,43 +113,9 @@ const createOrder = async (req, res, next) => {
     try{
         const items = validateItems(req.body.items)
 
-        const order = await prisma.$transaction(async (tx) => {
-            for(const item of items){
-                // Only reduce stock if there is enough. Doing the check and the
-                // update in one query stops two buyers from taking the last item.
-                const result = await tx.product.updateMany({
-                    where: { id: item.productId, stock: { gte: item.quantity } },
-                    data: { stock: { decrement: item.quantity } }
-                })
-
-                if(result.count === 0){
-                    const product = await tx.product.findUnique({
-                        where: { id: item.productId },
-                        select: { name: true, stock: true }
-                    })
-                    if(!product){
-                        throw new NotFound(`product ${item.productId} not found`)
-                    }
-                    throw new BadRequest(`not enough stock for ${product.name}, only ${product.stock} left`)
-                }
-            }
-
-            return tx.order.create({
-                data: {
-                    userId: req.user.id,
-                    // The schema requires one productId on the order itself.
-                    // The full list of products is in carts.
-                    productId: items[0].productId,
-                    carts: {
-                        create: items.map(item => ({
-                            productId: item.productId,
-                            quantity: item.quantity
-                        }))
-                    }
-                },
-                include: orderInclude
-            })
-        })
+        const order = await prisma.$transaction(
+            (tx) => placeOrder(tx, req.user.id, items)
+        )
 
         logger.info({
             message: "Order created",
