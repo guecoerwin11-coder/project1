@@ -122,9 +122,20 @@ describe('POST /api/products', () => {
 
         expect(res.status).toBe(201)
         expect(res.body.product.name).toBe('Keyboard')
-        expect(prismaMock.product.create).toHaveBeenCalledWith({
-            data: { name: 'Keyboard', price: 49.5, stock: 10 }
+        expect(prismaMock.product.create.mock.calls[0][0].data).toEqual({
+            name: 'Keyboard', price: 49.5, stock: 10, sellerId: 'user-ADMIN'
         })
+    })
+
+    it('makes the logged-in user the owner, ignoring any sellerId in the body', async () => {
+        prismaMock.product.create.mockImplementation(async ({ data }) => ({ id: 'prod-2', ...data }))
+
+        await request(app)
+            .post('/api/products')
+            .set(sellerAuth)
+            .send({ name: 'Keyboard', price: 49.5, sellerId: 'someone-else' })
+
+        expect(prismaMock.product.create.mock.calls[0][0].data.sellerId).toBe('user-SELLER')
     })
 
     it('ignores fields that are not allowed', async () => {
@@ -235,10 +246,9 @@ describe('PUT /api/products/:id', () => {
 
         expect(res.status).toBe(200)
         expect(res.body.product.stock).toBe(5)
-        expect(prismaMock.product.update).toHaveBeenCalledWith({
-            where: { id: 'prod-1' },
-            data: { stock: 5 }
-        })
+        const update = prismaMock.product.update.mock.calls[0][0]
+        expect(update.where).toEqual({ id: 'prod-1' })
+        expect(update.data).toEqual({ stock: 5 })
     })
 
     it('returns 403 for a CUSTOMER', async () => {
@@ -343,5 +353,92 @@ describe('DELETE /api/products/:id', () => {
             .set(auth)
 
         expect(res.status).toBe(404)
+    })
+})
+
+describe('product ownership', () => {
+    // sellerAuth belongs to user-SELLER
+    const mine = { ...sampleProduct, id: 'prod-mine', sellerId: 'user-SELLER' }
+    const theirs = { ...sampleProduct, id: 'prod-theirs', sellerId: 'other-seller' }
+    const noOwner = { ...sampleProduct, id: 'prod-old', sellerId: null }
+
+    beforeEach(() => {
+        prismaMock.product.update.mockImplementation(async ({ data }) => ({ ...mine, ...data }))
+        prismaMock.cart.count.mockResolvedValue(0)
+        prismaMock.product.delete.mockResolvedValue({})
+    })
+
+    it('lets a seller update their own product', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(mine)
+
+        const res = await request(app).put('/api/products/prod-mine').set(sellerAuth).send({ stock: 3 })
+
+        expect(res.status).toBe(200)
+        expect(prismaMock.product.update).toHaveBeenCalled()
+    })
+
+    it('blocks a seller from updating another seller\'s product', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(theirs)
+
+        const res = await request(app).put('/api/products/prod-theirs').set(sellerAuth).send({ stock: 0 })
+
+        expect(res.status).toBe(403)
+        expect(res.body.error.message).toBe('you can only change your own products')
+        expect(prismaMock.product.update).not.toHaveBeenCalled()
+    })
+
+    it('lets a seller delete their own product', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(mine)
+
+        const res = await request(app).delete('/api/products/prod-mine').set(sellerAuth)
+
+        expect(res.status).toBe(200)
+        expect(prismaMock.product.delete).toHaveBeenCalled()
+    })
+
+    it('blocks a seller from deleting another seller\'s product', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(theirs)
+
+        const res = await request(app).delete('/api/products/prod-theirs').set(sellerAuth)
+
+        expect(res.status).toBe(403)
+        expect(prismaMock.product.delete).not.toHaveBeenCalled()
+        expect(prismaMock.product.update).not.toHaveBeenCalled()
+    })
+
+    it('lets an admin update any seller\'s product', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(theirs)
+
+        const res = await request(app).put('/api/products/prod-theirs').set(auth).send({ stock: 1 })
+
+        expect(res.status).toBe(200)
+    })
+
+    it('keeps old products with no owner admin only', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(noOwner)
+
+        const asSeller = await request(app).put('/api/products/prod-old').set(sellerAuth).send({ stock: 1 })
+        const asAdmin = await request(app).put('/api/products/prod-old').set(auth).send({ stock: 1 })
+
+        expect(asSeller.status).toBe(403)
+        expect(asAdmin.status).toBe(200)
+    })
+
+    it('filters the list by seller', async () => {
+        prismaMock.product.findMany.mockResolvedValue([mine])
+
+        await request(app).get('/api/products?sellerId=user-SELLER')
+
+        expect(prismaMock.product.findMany.mock.calls[0][0].where).toEqual({ archivedAt: null, sellerId: 'user-SELLER' })
+    })
+
+    it('shows the seller\'s name but never their email', async () => {
+        prismaMock.product.findUnique.mockResolvedValue(mine)
+
+        await request(app).get('/api/products/prod-mine')
+
+        expect(prismaMock.product.findUnique.mock.calls[0][0].include).toEqual({
+            seller: { select: { id: true, userName: true } }
+        })
     })
 })
